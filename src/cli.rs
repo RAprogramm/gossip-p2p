@@ -1,3 +1,46 @@
+//! # CLI Module for GOSSIP P2P Application
+//!
+//! This module provides the command-line interface functionality for the GOSSIP P2P application.
+//! It includes parsing command-line arguments, generating help messages, and managing the settings
+//! required to initiate P2P communication.
+//!
+//! The module defines the `CliArguments` struct which holds all the necessary parameters
+//! extracted from the command line. It also contains functions to parse these arguments
+//! and to generate a formatted help message that includes usage instructions and examples.
+//!
+//! ## Features
+//!
+//! - Parse command-line arguments for the application.
+//! - Provide detailed help messages and usage examples.
+//! - Support for essential P2P settings: messaging period, connection port, and optional peer connection.
+//!
+//! ## Usage
+//!
+//! To use this module, include it in your main application file and call the `parse_arguments`
+//! function with the command-line arguments. This function will return a `CliArguments` struct
+//! which can be used to configure the P2P application.
+//!
+//! ```
+//! use gossip_p2p::cli::{parse_arguments, CliArguments, get_help_message};
+//!
+//! fn main() {
+//!     let args: Vec<String> = std::env::args().collect();
+//!     match parse_arguments(&args[1..]) {
+//!         Ok(cli_args) => {
+//!             // Use cli_args to configure the application
+//!         },
+//!         Err(e) => {
+//!             eprintln!("{}", e);
+//!             eprintln!("{}", get_help_message(&args[0]));
+//!             std::process::exit(1);
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Ensure that you handle the `Result` returned by `parse_arguments` properly, displaying
+//! the help message and terminating the application in case of an error.
+
 // Constants for the application's name and description.
 const APP_NAME: &str = "\t\t\t---{ GOSSIP P2P }---";
 const APP_DESCRIPTION: &str = "\t\tSimple p2p gossiping application in Rust.";
