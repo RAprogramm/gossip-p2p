@@ -1,5 +1,6 @@
 mod cli;
 mod logger;
+mod message;
 mod peer;
 mod peer_storage;
 
