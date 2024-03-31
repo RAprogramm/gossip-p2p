@@ -28,7 +28,6 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
-            // Здесь логика работы вашего приложения с использованием cli_args
             // println!(
             //     "Period: {}, Port: {}, Connect: {:?}",
             //     cli_args.period, cli_args.port, cli_args.connect
