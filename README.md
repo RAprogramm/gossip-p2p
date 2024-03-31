@@ -1,0 +1,2 @@
+# Summary
+Your task is to design a simple p2p gossiping application in Rust. The peer should have a cli interface to start it and connect itself to the other peers. Once connected, the peer should send a random gossip message to all the other peers every N seconds. The messaging period should also be specifiable in the command line. When a peer receives a message from the other peers, it should print it in the console.

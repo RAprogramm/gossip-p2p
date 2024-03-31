@@ -23,17 +23,15 @@
 //! ```
 //! use gossip_p2p::cli::{parse_arguments, CliArguments, get_help_message};
 //!
-//! fn main() {
-//!     let args: Vec<String> = std::env::args().collect();
-//!     match parse_arguments(&args[1..]) {
-//!         Ok(cli_args) => {
-//!             // Use cli_args to configure the application
-//!         },
-//!         Err(e) => {
-//!             eprintln!("{}", e);
-//!             eprintln!("{}", get_help_message(&args[0]));
-//!             std::process::exit(1);
-//!         }
+//! let args: Vec<String> = std::env::args().collect();
+//! match parse_arguments(&args[1..]) {
+//!     Ok(cli_args) => {
+//!         // Use cli_args to configure the application
+//!     },
+//!     Err(e) => {
+//!         eprintln!("{}", e);
+//!         eprintln!("{}", get_help_message(&args[0]));
+//!         std::process::exit(1);
 //!     }
 //! }
 //! ```
