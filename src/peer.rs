@@ -1,252 +1,225 @@
-use std::collections::HashMap;
-use std::io;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Instant;
-
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
-use tokio::time::{sleep, Duration};
-
-use crate::logger::{init as logger_init, log};
+// use crate::logger::log;
 use crate::message::Message;
+use crate::peer_storage::PeerAddr;
 use crate::peer_storage::PeersStorage;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Endpoint(SocketAddr);
-
-impl Endpoint {
-    fn addr(&self) -> SocketAddr {
-        self.0
-    }
-}
-
+use message_io::network::NetworkController;
+use message_io::network::NetworkProcessor;
+use message_io::network::{split, Endpoint, NetEvent, Transport};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 pub struct Peer {
-    peers: Arc<Mutex<PeersStorage>>,
+    peers: Arc<Mutex<PeersStorage<Endpoint>>>,
     public_addr: SocketAddr,
-    period: Duration,
+    period: u32,
+    network: Arc<Mutex<NetworkController>>,
+    event_queue: NetworkProcessor,
     connect: Option<String>,
-    time_start: Arc<Instant>,          
-    receiver: mpsc::Receiver<Message>, 
-    sender: mpsc::Sender<Message>,     
 }
 
 impl Peer {
-    pub async fn new(port: u16, period: u64, connect: Option<String>) -> Result<Self, io::Error> {
-        let public_addr = format!("127.0.0.1:{}", port).parse().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Failed to parse socket address",
-            )
-        })?;
-        let peers_storage = PeersStorage {
-            peers: HashMap::new(),
-        };
+    pub fn new(port: u32, period: u32, connect: Option<String>) -> Result<Self, std::io::Error> {
+        let (mut network, event_queue) = split();
 
-        let time_start = logger_init(&public_addr).await;
-
-        let (sender, receiver) = mpsc::channel(100); // create channel
+        // Listening own addr
+        let listen_addr = format!("127.0.0.1:{}", port);
+        let (_, addr) = network.listen(Transport::FramedTcp, &listen_addr)?;
+        // log_my_address(&addr);
 
         Ok(Self {
-            peers: Arc::new(Mutex::new(peers_storage)),
-            public_addr,
-            period: Duration::from_secs(period),
+            event_queue,
+            network: Arc::new(Mutex::new(network)),
+            period,
             connect,
-            time_start, 
-            sender,
-            receiver,
+            public_addr: addr,
+            peers: Arc::new(Mutex::new(PeersStorage::new(addr))),
         })
     }
-    // init and run peer
-    pub async fn run(&self) -> Result<(), io::Error> {
-        // handle peer connection
+
+    pub fn run(mut self) {
         if let Some(addr) = &self.connect {
-            self.initialize_connection(addr).await?;
+            let mut network = self.network.lock().unwrap();
+
+            // Connection to the first peer
+            match network.connect(Transport::FramedTcp, addr) {
+                Ok((endpoint, _)) => {
+                    {
+                        let mut peers = self.peers.lock().unwrap();
+                        peers.add_old_one(endpoint);
+                    }
+
+                    // Передаю свой публичный адрес
+                    send_message(
+                        &mut network,
+                        endpoint,
+                        &Message::MyPubAddr(self.public_addr.clone()),
+                    );
+
+                    // Request a list of existing peers
+                    // Response will be in event queue
+                    send_message(&mut network, endpoint, &Message::GiveMeAListOfPeers);
+                }
+                Err(_) => {
+                    println!("Failed to connect to {}", &addr);
+                }
+            }
         }
 
-        // listen incom
-        self.listen_for_incoming_connections().await;
+        // spawning thread which will be send random messages to known peers
+        self.spawn_emit_loop();
 
-        // mess
-        self.periodic_message_sending().await;
+        loop {
+            match self.network.lock().unwrap().receive() {
+                // Waiting events
+                NetEvent::Message(message_sender, input_data) => {
+                    match bincode::deserialize(&input_data).unwrap() {
+                        Message::MyPubAddr(pub_addr) => {
+                            let mut peers = self.peers.lock().unwrap();
+                            peers.add_new_one(message_sender, pub_addr);
+                        }
+                        Message::GiveMeAListOfPeers => {
+                            let list = {
+                                let peers = self.peers.lock().unwrap();
+                                peers.get_peers_list()
+                            };
+                            let msg = Message::TakePeersList(list);
+                            send_message(&mut self.network.lock().unwrap(), message_sender, &msg);
+                        }
+                        Message::TakePeersList(addrs) => {
+                            let filtered: Vec<&SocketAddr> = addrs
+                                .iter()
+                                .filter_map(|x| {
+                                    // Проверяю, чтобы не было себя
+                                    if x != &self.public_addr {
+                                        Some(x)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
 
-        Ok(())
-    }
-    async fn initialize_connection(&self, addr: &str) -> Result<(), io::Error> {
-        let peer_addr = addr
-            .parse::<SocketAddr>()
-            .expect("Failed to parse connect address");
-        send_message_to_peer(&peer_addr, &Message::GiveMeAListOfPeers, &self.sender).await?;
-        Ok(())
-    }
+                            // log_connected_to_the_peers(&filtered);
 
-    // listen and handle
-    async fn listen_for_incoming_connections(&self) {
-        let listener = TcpListener::bind(self.public_addr)
-            .await
-            .expect("Failed to bind to port");
-        let peers = self.peers.clone();
-        tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                let peers_clone = peers.clone();
-                tokio::spawn(handle_incoming_messages(socket, peers_clone, self.sender));
+                            let mut network = self.network.lock().unwrap();
+
+                            for peer in filtered {
+                                if peer == &message_sender.addr() {
+                                    continue;
+                                }
+
+                                // к каждому подключиться и послать свой публичный адрес
+                                // и запомнить
+
+                                // connecting to peer
+                                let (endpoint, _) =
+                                    network.connect(Transport::FramedTcp, *peer).unwrap();
+
+                                // sending public address
+                                let msg = Message::MyPubAddr(self.public_addr);
+                                send_message(&mut network, endpoint, &msg);
+
+                                // saving peer
+                                self.peers.lock().unwrap().add_old_one(endpoint);
+                                // self.peers.add_old_one(endpoint);
+                            }
+                        }
+                        Message::Info(text) => {
+                            let pub_addr = self
+                                .peers
+                                .lock()
+                                .unwrap()
+                                .get_pub_addr(&message_sender)
+                                .unwrap();
+                            // log_message_received(&pub_addr, &text);
+                        }
+                    }
+                }
+                NetEvent::Connected(_, _) => {}
+                NetEvent::Disconnected(endpoint) => {
+                    let mut peers = self.peers.lock().unwrap();
+                    PeersStorage::remove_peer(&mut peers, endpoint);
+                    // self.peers.drop(endpoint);
+                }
             }
-        });
+        }
     }
 
-    // mess
-    async fn periodic_message_sending(&self) {
-        let period = self.period;
-        let peers = self.peers.clone();
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(period);
-            while interval.tick().await {
-                let peers_guard = peers.lock().await;
-                for peer_addr in peers_guard.peers.keys() {
-                    let msg = Message::Info("Periodic message".to_string());
-                    send_message_to_peer(&peer_addr.addr(), &msg, &sender)
-                        .await
-                        .unwrap_or_else(|e| eprintln!("Error: {}", e));
+    fn spawn_emit_loop(&self) {
+        let sleep_duration = Duration::from_secs(self.period as u64);
+        let peers_mut = Arc::clone(&self.peers);
+        let network_mut = Arc::clone(&self.network);
+
+        thread::spawn(move || {
+            // sleeping and sending
+            loop {
+                thread::sleep(sleep_duration);
+
+                let peers = peers_mut.lock().unwrap();
+                let receivers = peers.receivers();
+
+                // if there are no receivers, skip
+                if receivers.len() == 0 {
+                    continue;
+                }
+
+                let mut network = network_mut.lock().unwrap();
+
+                let msg_text = generate_random_message();
+                let msg = Message::Info(msg_text.clone());
+
+                // log_sending_message(
+                //     &msg_text,
+                //     &receivers
+                //         .iter()
+                //         .map(|PeerAddr { public, .. }| public)
+                //         .collect(),
+                // );
+
+                for PeerAddr { endpoint, .. } in receivers {
+                    send_message(&mut network, endpoint, &msg);
                 }
             }
         });
     }
 }
 
-// impl Peer {
-//     pub async fn new(port: u16, period: u64, connect: Option<String>) -> Result<Self, io::Error> {
-//         let public_addr = format!("127.0.0.1:{}", port).parse().map_err(|_| {
-//             io::Error::new(
-//                 io::ErrorKind::InvalidInput,
-//                 "Failed to parse socket address",
-//             )
-//         })?;
-//         let peers_storage = PeersStorage {
-//             peers: HashMap::new(),
-//         };
-//
-//         let time_start = logger_init(&public_addr).await;
-//
-//         let (sender, receiver) = mpsc::channel(100); 
-//
-//         Ok(Self {
-//             peers: Arc::new(Mutex::new(peers_storage)),
-//             public_addr,
-//             period: Duration::from_secs(period),
-//             connect,
-//             time_start, 
-//             sender,
-//             receiver,
-//         })
-//     }
-//
-//     pub async fn run(&self) -> Result<(), io::Error> {
-//         if let Some(addr) = &self.connect {
-//             let peer_addr = addr.parse().expect("Failed to parse address");
-//             send_message_to_peer(
-//                 &peer_addr,
-//                 &Message::Info("Hello, peer!".to_string()),
-//                 &self.sender,
-//             )
-//             .await?;
-//             let stream = match TcpStream::connect(addr).await {
-//                 Ok(mut stream) => {
-//                     let connect_message = format!("connected to {}", addr);
-//
-//                     log(self.time_start.clone(), &connect_message).await; 
-//                                                                           
-//                     let local_addr = stream.local_addr()?;
-//                     let message = format!("My public port is: {}", self.public_addr.port());
-//                     stream.write_all(message.as_bytes()).await?;
-//                     stream
-//                 }
-//                 Err(e) => {
-//                     let error_message = format!("can not connect to {}: {}", addr, e);
-//                     log(self.time_start.clone(), &error_message).await; 
-//                     return Err(e);
-//                 }
-//             };
-//         }
-//
-//         // Слушаем входящие соединения
-//         let listener = TcpListener::bind(self.public_addr).await?;
-//         tokio::spawn(async move {
-//             while let Ok((socket, _)) = listener.accept().await {
-//                 tokio::spawn(handle_incoming_messages(socket));
-//             }
-//         });
-//
-//         // let listener = TcpListener::bind(self.public_addr).await?;
-//         // let peers = self.peers.clone();
-//         // let time_start = self.time_start.clone(); 
-//         // tokio::spawn(async move {
-//         //     loop {
-//         //         match listener.accept().await {
-//         //             Ok((mut socket, addr)) => {
-//         //                 let mut buffer = [0; 1024]; // buf for read
-//         //                 match socket.read(&mut buffer).await {
-//         //                     Ok(_) => {
-//         //                         let message = String::from_utf8_lossy(&buffer);
-//         //                         let received_message = format!("Received message: {}", message);
-//         //                         log(time_start.clone(), &received_message).await;
-//         //                     }
-//         //                     Err(e) => {
-//         //                         let error_message = format!("err mes reading: {}", e);
-//         //                         log(time_start.clone(), &error_message).await;
-//         //                     }
-//         //                 }
-//         //             }
-//         //             Err(e) => {
-//         //                 let error_message = format!("Failed to accept connection: {}", e);
-//         //                 log(time_start.clone(), &error_message).await;
-//         //             }
-//         //         }
-//         //     }
-//         // });
-//
-//         // let receiver = self.receiver.clone();
-//         let peers = self.peers.clone();
-//         let period = self.period;
-//
-//         let sender_clone = self.sender.clone();
-//
-//         let time_start = self.time_start.clone(); // clone to use in closure
-//         tokio::spawn(async move {
-//             loop {
-//                 sleep(period).await;
-//
-//                 log(time_start.clone(), "tik").await;
-//                 // clone peer for async
-//                 let peers_guard = peers.lock().await;
-//                 for peer_addr in peers_guard.peers.keys() {
-//                     let msg = Message::Info("Periodic message".to_string());
-//                     let peer_socket_addr = peer_addr.addr();
-//                     // clone sender to use in async
-//                     let sender_clone = sender_clone.clone();
-//                     tokio::spawn(async move {
-//                         send_message_to_peer(&peer_socket_addr, &msg, &sender_clone)
-//                             .await
-//                             .unwrap_or_else(|e| eprintln!("Error sending message: {}", e));
-//                     });
-//                 }
-//             }
-//         });
-//
-//         Ok(())
-//     }
-// }
+fn send_message(network: &mut NetworkController, to: Endpoint, msg: &Message) {
+    let output_data = bincode::serialize(msg).unwrap();
+    network.send(to, &output_data);
+}
+
+fn generate_random_message() -> String {
+    "test random message".to_string()
+}
 
 trait ToSocketAddr {
     fn get_addr(&self) -> SocketAddr;
 }
 
+impl ToSocketAddr for Endpoint {
+    fn get_addr(&self) -> SocketAddr {
+        self.addr()
+    }
+}
+
+impl ToSocketAddr for &Endpoint {
+    fn get_addr(&self) -> SocketAddr {
+        self.addr()
+    }
+}
+
 impl ToSocketAddr for SocketAddr {
     fn get_addr(&self) -> SocketAddr {
-        *self
+        self.clone()
+    }
+}
+
+impl ToSocketAddr for &SocketAddr {
+    fn get_addr(&self) -> SocketAddr {
+        *self.clone()
     }
 }
 
@@ -264,101 +237,26 @@ fn format_list_of_addrs<T: ToSocketAddr>(items: &Vec<T>) -> String {
     }
 }
 
-fn log_connected_to_the_peers<T: ToSocketAddr>(peers: &Vec<T>) {
-    println!("Connected to the peers at {}", format_list_of_addrs(peers));
-}
-
-async fn send_message_to_peer(
-    peer_addr: &SocketAddr,
-    message: &Message,
-    sender: &mpsc::Sender<Message>,
-) -> io::Result<()> {
-    let mut stream = TcpStream::connect(peer_addr).await?;
-    let serialized_message = message.serialize();
-    let send_result = stream.write_all(serialized_message.as_bytes()).await;
-
-    match send_result {
-        Ok(_) => {
-            let confirm_message = Message::Info(format!("Message sent to {}", peer_addr));
-            if sender.send(confirm_message).await.is_err() {
-                eprintln!("Failed to send confirm message to channel");
-            }
-        }
-        Err(e) => {
-            let error_message =
-                Message::Info(format!("Failed to send message to {}: {}", peer_addr, e));
-            if sender.send(error_message).await.is_err() {
-                eprintln!("Failed to send error message to channel");
-            }
-            return Err(e);
-        }
-    }
-
-    Ok(())
-}
-
-// async fn handle_incoming_messages(mut socket: TcpStream) {
-//     let mut buf = [0; 1024]; // buf for mes
-//     while let Ok(size) = socket.read(&mut buf).await {
-//         if size == 0 {
-//             break;
-//         } // conn slose
-//
-//         let received_data = String::from_utf8_lossy(&buf[..size]);
-//         if let Some(message) = Message::deserialize(&received_data) {
-//             match message {
-//                 // handle mess
-//                 Message::Info(msg) => println!("Info message: {}", msg),
-//                 Message::TakePeersList(msg) => println!("Peer list: {:?}", msg),
-//                 _ => {}
-//             }
-//         }
-//     }
+// fn log_message_received<T: ToSocketAddr>(from: &T, text: &str) {
+//     log(
+//         "Received message [{}] from \"{}\"",
+//         text,
+//         ToSocketAddr::get_addr(from)
+//     );
 // }
-
-async fn handle_incoming_messages(
-    mut socket: TcpStream,
-    peers: Arc<Mutex<PeersStorage>>,
-    sender: mpsc::Sender<Message>,
-) {
-    let mut buf = [0; 1024];
-    while let Ok(size) = socket.read(&mut buf).await {
-        if size == 0 {
-            break;
-        }
-
-        if let Some(message) = Message::deserialize(&String::from_utf8_lossy(&buf[..size])) {
-            match message {
-                Message::GiveMeAListOfPeers => {
-                    // get peers list
-                    let peers_list = peers.lock().await.get_peers_list().await;
-                    // redirect peers list
-                    send_message_to_peer(
-                        &socket.peer_addr().unwrap(),
-                        &Message::TakePeersList(peers_list),
-                        &sender,
-                    )
-                    .await
-                    .unwrap();
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-async fn handle_give_me_a_list_of_peers(
-    sender: &mpsc::Sender<Message>,
-    peers: Arc<Mutex<PeersStorage>>,
-) {
-    let peers_guard = peers.lock().await;
-    let peer_addresses: Vec<SocketAddr> = peers_guard
-        .peers
-        .iter()
-        .map(|(endpoint, _info)| endpoint.addr())
-        .collect();
-    let message = Message::TakePeersList(peer_addresses);
-    if let Err(e) = sender.send(message).await {
-        eprintln!("Error sending list of peers: {}", e);
-    }
-}
+//
+// fn log_my_address<T: ToSocketAddr>(addr: &T) {
+//     log("My address is \"{}\"", ToSocketAddr::get_addr(addr));
+// }
+//
+// fn log_connected_to_the_peers<T: ToSocketAddr>(peers: &Vec<T>) {
+//     log("Connected to the peers at {}", format_list_of_addrs(peers));
+// }
+//
+// fn log_sending_message<T: ToSocketAddr>(message: &str, receivers: &Vec<T>) {
+//     log(
+//         "Sending message [{}] to {}",
+//         message,
+//         format_list_of_addrs(receivers)
+//     );
+// }

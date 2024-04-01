@@ -1,74 +1,76 @@
+use message_io::network::Endpoint;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
-/// Storage for peers - old ones and new ones
-pub struct PeersStorage<T: PeerEndpoint + Clone + std::hash::Hash + Eq> {
-    map: Arc<Mutex<HashMap<T, PeerInfo>>>,
+pub struct PeersStorage<T: PeerEndpoint> {
+    map: HashMap<T, PeerInfo>,
     self_pub_addr: SocketAddr,
 }
 
-/// Trait that generalizes endpoint behavior - for tests and abstraction
 pub trait PeerEndpoint {
     fn addr(&self) -> SocketAddr;
 }
 
-#[derive(Debug, PartialEq, Clone)]
+impl PeerEndpoint for Endpoint {
+    fn addr(&self) -> SocketAddr {
+        self.addr()
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub struct PeerAddr<T: PeerEndpoint> {
     pub public: SocketAddr,
     pub endpoint: T,
 }
 
 enum PeerInfo {
-    OldOne,
+    KnownPeer,
     NewOne(SocketAddr),
 }
 
-impl<T: PeerEndpoint + std::hash::Hash + Eq + Clone + Send + Sync + 'static> PeersStorage<T> {
+impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
     pub fn new(self_pub_addr: SocketAddr) -> Self {
         Self {
-            map: Arc::new(Mutex::new(HashMap::new())),
+            map: HashMap::new(),
             self_pub_addr,
         }
     }
 
-    pub async fn add_old_one(&self, endpoint: T) {
-        let mut map = self.map.lock().await;
-        map.insert(endpoint, PeerInfo::OldOne);
+    pub fn add_old_one(&mut self, endpoint: T) {
+        self.map.insert(endpoint, PeerInfo::KnownPeer);
     }
 
-    pub async fn add_new_one(&self, endpoint: T, pub_addr: SocketAddr) {
-        let mut map = self.map.lock().await;
-        map.insert(endpoint, PeerInfo::NewOne(pub_addr));
+    pub fn add_new_one(&mut self, endpoint: T, pub_addr: SocketAddr) {
+        self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
     }
 
-    pub async fn drop(&self, endpoint: T) {
-        let mut map = self.map.lock().await;
-        map.remove(&endpoint);
+    pub fn remove_peer(&mut self, endpoint: T) {
+        self.map.remove(&endpoint);
     }
 
-    pub async fn get_peers_list(&self) -> Vec<SocketAddr> {
-        let map = self.map.lock().await;
-        let mut list: Vec<SocketAddr> = Vec::with_capacity(map.len() + 1);
+    pub fn get_peers_list(&self) -> Vec<SocketAddr> {
+        let mut list: Vec<SocketAddr> = Vec::with_capacity(self.map.len() + 1);
         list.push(self.self_pub_addr);
-        map.iter()
+        self.map
+            .iter()
             .map(|(endpoint, info)| match info {
-                PeerInfo::OldOne => endpoint.addr(),
-                PeerInfo::NewOne(public_addr) => *public_addr,
+                PeerInfo::KnownPeer => endpoint.addr(),
+                PeerInfo::NewOne(public_addr) => public_addr.clone(),
             })
-            .for_each(|addr| list.push(addr));
+            .for_each(|addr| {
+                list.push(addr);
+            });
 
         list
     }
 
-    pub async fn receivers(&self) -> Vec<PeerAddr<T>> {
-        let map = self.map.lock().await;
-        map.iter()
+    pub fn receivers(&self) -> Vec<PeerAddr<T>> {
+        self.map
+            .iter()
             .map(|(endpoint, info)| {
                 let public = match info {
-                    PeerInfo::OldOne => endpoint.addr(),
-                    PeerInfo::NewOne(public_addr) => *public_addr,
+                    PeerInfo::KnownPeer => endpoint.addr(),
+                    PeerInfo::NewOne(public_addr) => public_addr.clone(),
                 };
                 PeerAddr {
                     endpoint: endpoint.clone(),
@@ -78,11 +80,10 @@ impl<T: PeerEndpoint + std::hash::Hash + Eq + Clone + Send + Sync + 'static> Pee
             .collect()
     }
 
-    pub async fn get_pub_addr(&self, endpoint: &T) -> Option<SocketAddr> {
-        let map = self.map.lock().await;
-        map.get(endpoint).map(|info| match info {
-            PeerInfo::OldOne => endpoint.addr(),
-            PeerInfo::NewOne(addr) => *addr,
+    pub fn get_pub_addr(&self, endpoint: &T) -> Option<SocketAddr> {
+        self.map.get(endpoint).map(|founded| match founded {
+            PeerInfo::KnownPeer => endpoint.addr(),
+            PeerInfo::NewOne(addr) => addr.clone(),
         })
     }
 }
