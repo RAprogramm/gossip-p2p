@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     MyPubAddr(SocketAddr),
     GiveMeAListOfPeers,
