@@ -3,10 +3,10 @@ use std::net::SocketAddr;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
-    MyPubAddr(SocketAddr),
-    GiveMeAListOfPeers,
-    TakePeersList(Vec<SocketAddr>),
-    Info(String),
+    PublicAddress(SocketAddr),
+    PushPeersList,
+    PullPeersList(Vec<SocketAddr>),
+    Text(String),
 }
 
 // impl Message {

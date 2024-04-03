@@ -40,24 +40,24 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
         self.map.insert(endpoint, PeerInfo::KnownPeer);
     }
 
-    pub fn add_unknown_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
-        self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
-    }
-
-    // pub fn add_known_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
-    //     // Не добавляем, если такой адрес уже присутствует
-    //     if !self
-    //         .map
-    //         .values()
-    //         .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
-    //     {
-    //         self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
-    //     }
-    // }
-
-    pub fn remove_peer(&mut self, endpoint: T) {
+    pub fn drop(&mut self, endpoint: T) {
         self.map.remove(&endpoint);
     }
+
+    pub fn add_unknown_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
+        // Не добавляем, если такой адрес уже присутствует
+        if !self
+            .map
+            .values()
+            .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
+        {
+            self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
+        }
+    }
+
+    // pub fn remove_peer(&mut self, endpoint: T) {
+    //     self.map.remove(&endpoint);
+    // }
 
     pub fn get_peers_list(&self) -> Vec<SocketAddr> {
         let mut list: Vec<SocketAddr> = Vec::with_capacity(self.map.len() + 1);

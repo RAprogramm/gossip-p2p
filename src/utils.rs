@@ -47,7 +47,7 @@ pub fn format_list_of_addrs<T: ToSocketAddr>(items: &[T]) -> String {
     }
 }
 
-pub fn send_message(handler: &NodeHandler<()>, to: Endpoint, msg: &Message) {
+pub fn send_message(handler: &mut NodeHandler<()>, to: Endpoint, msg: &Message) {
     let output_data = bincode::serialize(msg).unwrap();
     handler.network().send(to, &output_data);
 }
