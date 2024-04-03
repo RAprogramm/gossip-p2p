@@ -36,24 +36,24 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
         }
     }
 
-    pub fn add_old_one(&mut self, endpoint: T) {
+    pub fn add_known_peer(&mut self, endpoint: T) {
         self.map.insert(endpoint, PeerInfo::KnownPeer);
     }
 
-    // pub fn add_new_one(&mut self, endpoint: T, pub_addr: SocketAddr) {
-    //     self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
-    // }
-
-    pub fn add_new_one(&mut self, endpoint: T, pub_addr: SocketAddr) {
-        // Не добавляем, если такой адрес уже присутствует
-        if !self
-            .map
-            .values()
-            .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
-        {
-            self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
-        }
+    pub fn add_unknown_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
+        self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
     }
+
+    // pub fn add_known_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
+    //     // Не добавляем, если такой адрес уже присутствует
+    //     if !self
+    //         .map
+    //         .values()
+    //         .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
+    //     {
+    //         self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
+    //     }
+    // }
 
     pub fn remove_peer(&mut self, endpoint: T) {
         self.map.remove(&endpoint);

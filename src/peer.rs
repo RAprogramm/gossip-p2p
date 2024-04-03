@@ -1,4 +1,5 @@
 use crate::peer_storage::{PeerAddr, PeersStorage};
+use crate::utils::{format_list_of_addrs, send_message};
 
 use super::message::Message;
 
@@ -56,7 +57,7 @@ impl Peer {
                 Ok((endpoint, _)) => {
                     {
                         let mut peers = self.participants.lock().unwrap();
-                        peers.add_old_one(endpoint);
+                        peers.add_known_peer(endpoint);
                     }
 
                     // Передаю свой публичный адрес
@@ -115,12 +116,11 @@ impl Peer {
 
         let node_listener = self.node_listener.take().unwrap();
         node_listener.for_each(move |event| match event.network() {
-            NetEvent::Connected(_, _) => {}
-
-            NetEvent::Accepted(endpoint, _) => {
+            NetEvent::Accepted(_, _) => {}
+            NetEvent::Connected(endpoint, _) => {
                 {
                     let mut peers = self.participants.lock().unwrap();
-                    peers.add_old_one(endpoint);
+                    peers.add_known_peer(endpoint);
                 }
 
                 // Передаю свой публичный адрес
@@ -137,10 +137,11 @@ impl Peer {
 
             NetEvent::Message(message_sender, input_data) => {
                 let message: Message = bincode::deserialize(input_data).unwrap();
+
                 match message {
                     Message::MyPubAddr(pub_addr) => {
                         let mut participants = self.participants.lock().unwrap();
-                        participants.add_new_one(message_sender, pub_addr);
+                        participants.add_unknown_peer(message_sender, pub_addr);
                     }
 
                     Message::GiveMeAListOfPeers => {
@@ -153,8 +154,10 @@ impl Peer {
                     }
 
                     Message::TakePeersList(addrs) => {
-                        let filtered: Vec<&SocketAddr> =
-                            addrs.iter().filter(|x| x != &&self.public_addr).collect();
+                        let filtered: Vec<&SocketAddr> = addrs
+                            .iter()
+                            .filter(|addr| addr != &&self.public_addr)
+                            .collect();
 
                         let foramtted_msg = format!(
                             "Connected to the peers at {}",
@@ -192,49 +195,3 @@ impl Peer {
     }
 }
 
-trait ToSocketAddr {
-    fn get_addr(&self) -> SocketAddr;
-}
-
-impl ToSocketAddr for Endpoint {
-    fn get_addr(&self) -> SocketAddr {
-        self.addr()
-    }
-}
-
-impl ToSocketAddr for &Endpoint {
-    fn get_addr(&self) -> SocketAddr {
-        self.addr()
-    }
-}
-
-impl ToSocketAddr for SocketAddr {
-    fn get_addr(&self) -> SocketAddr {
-        *self
-    }
-}
-
-impl ToSocketAddr for &SocketAddr {
-    fn get_addr(&self) -> SocketAddr {
-        **self
-    }
-}
-
-fn format_list_of_addrs<T: ToSocketAddr>(items: &[T]) -> String {
-    if items.is_empty() {
-        "[no one]".to_owned()
-    } else {
-        let joined = items
-            .iter()
-            .map(|x| format!("\"{}\"", ToSocketAddr::get_addr(x)))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        format!("[{}]", joined)
-    }
-}
-
-fn send_message(handler: &NodeHandler<()>, to: Endpoint, msg: &Message) {
-    let output_data = bincode::serialize(msg).unwrap();
-    handler.network().send(to, &output_data);
-}

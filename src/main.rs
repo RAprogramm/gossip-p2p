@@ -3,6 +3,7 @@ mod message;
 mod peer;
 mod peer_storage;
 mod printer;
+mod utils;
 
 use std::convert::TryInto;
 
