@@ -1,19 +1,26 @@
-use crate::peer_storage::PeersStorage;
+use crate::peer_storage::{PeerAddr, PeersStorage};
 
 use super::message::Message;
 
+use message_io::events::TimerId;
 use message_io::network::{Endpoint, NetEvent, Transport};
 use message_io::node::{self, NodeHandler, NodeListener};
 
-use crate::printer::init as logger_init;
+use crate::printer::{init as logger_init, print_event};
 use std::io::{self};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 // struct ParticipantInfo {
 //     addr: SocketAddr,
 //     endpoint: Endpoint,
+// }
+
+// enum MyEvent {
+//     TimerTick,
+//     // Другие события...
 // }
 
 pub struct Peer {
@@ -55,7 +62,8 @@ impl Peer {
                 Ok((endpoint, _)) => {
                     // Здесь вы можете добавить логику регистрации или отправки специфических сообщений
                     // на подключенный узел сразу после установления соединения
-                    println!("Successfully connected to {}", connect_str);
+                    let msg = format!("Successfully connected to {}", connect_str);
+                    print_event(peer.time_start.clone(), &msg);
 
                     // Например, регистрируем этот endpoint в participants
                     peer.participants
@@ -75,18 +83,46 @@ impl Peer {
 
     pub fn run(mut self) {
         let node_listener = self.node_listener.take().unwrap();
+
+        // let (sender, receiver) = message_io::events::split::<MyEvent>();
+        // let timer_id: TimerId =
+        //     sender.schedule_with_delay(Duration::from_secs(self.period.into()), MyEvent::TimerTick);
+        // for event in receiver {
+        //     match event {
+        //         MyEvent::TimerTick => {}
+        //     }
+        // }
+        // self.spawn_emit_loop(&self.handler, self.participants.clone(), self.period);
+
         node_listener.for_each(move |event| match event.network() {
-            NetEvent::Accepted(_, _) => (),
-            NetEvent::Connected(endpoint, established) => {
-                if established {
-                    // println!("Connected to a new peer: {:?}", self.public_addr);
-
-                    let mut participants = self.participants.lock().unwrap();
-                    participants.add_new_one(endpoint, endpoint.addr());
-
-                    // println!("Connected {}", endpoint);
+            // NetEvent::Accepted(_, _) => (),
+            NetEvent::Accepted(endpoint, _) => {
+                {
+                    let mut peers = self.participants.lock().unwrap();
+                    peers.add_old_one(endpoint);
                 }
+
+                // Передаю свой публичный адрес
+                send_message(
+                    &self.handler,
+                    endpoint,
+                    &Message::MyPubAddr(self.public_addr),
+                );
+
+                // Request a list of existing peers
+                // Response will be in event queue
+                send_message(&self.handler, endpoint, &Message::GiveMeAListOfPeers);
             }
+            NetEvent::Connected(_, _) => {}
+            // NetEvent::Connected(endpoint, established) => {
+            //     if established {
+            //
+            //         let mut participants = self.participants.lock().unwrap();
+            //         participants.add_new_one(endpoint, endpoint.addr());
+            //
+            //         println!("Connected {}", endpoint.addr());
+            //     }
+            // }
             NetEvent::Message(message_sender, input_data) => {
                 let message: Message = bincode::deserialize(input_data).unwrap();
                 match message {
@@ -106,26 +142,29 @@ impl Peer {
                         let filtered: Vec<&SocketAddr> =
                             addrs.iter().filter(|x| x != &&self.public_addr).collect();
 
-                        log_connected_to_the_peers(&filtered);
+                        print_event(self.time_start.clone(), &format_list_of_addrs(&filtered));
 
                         for peer in &filtered {
                             if peer == &&message_sender.addr() {
+                                println!("{}", peer);
                                 continue;
                             }
 
                             // к каждому подключиться и послать свой публичный адрес и запомнить
-                            let (endpoint, _) = self
-                                .handler
-                                .network()
-                                .connect(Transport::FramedTcp, **peer)
-                                .unwrap();
+                            // let (endpoint, _) = self
+                            //     .handler
+                            //     .network()
+                            //     .connect(Transport::FramedTcp, **peer)
+                            //     .unwrap();
+                            println!("{:?}", &filtered);
 
                             // sending public address
                             let msg = Message::MyPubAddr(self.public_addr);
-                            send_message(&self.handler, endpoint, &msg);
+                                println!("{:?}", msg);
+                            // send_message(&self.handler, endpoint, &msg);
 
                             // saving peer
-                            self.participants.lock().unwrap().add_old_one(endpoint);
+                            // self.participants.lock().unwrap().add_old_one(endpoint);
                         }
                     }
                     Message::Info(text) => {
@@ -163,71 +202,42 @@ impl Peer {
         });
     }
 
-    //     fn register(
-    //         &self,
-    //         participants: Arc<Mutex<PeersStorage<Endpoint>>>,
-    //         addr: SocketAddr,
-    //         endpoint: Endpoint,
-    //         handler: &NodeHandler<()>,
-    //     ) {
-    //         let mut storage = participants.lock().unwrap(); // Блокируем хранилище для безопасного доступа
-    //
-    //         if storage.get_pub_addr(&endpoint).is_none() {
-    //             // Проверяем, что участник не зарегистрирован
-    //             // Пример получения списка адресов текущих участников для отправки новому участнику
-    //             let list = storage.get_peers_list().to_vec();
-    //             // .iter()
-    //             // .copied()
-    //             // // .map(|addr| addr)
-    //             // .collect::<Vec<SocketAddr>>();
-    //
-    //             let message = Message::ParticipantList(list.clone());
-    //             let output_data = bincode::serialize(&message).unwrap();
-    //             handler.network().send(endpoint, &output_data); // Отправляем список текущих участников новому участнику
-    //
-    //             // Оповещаем всех остальных участников о добавлении нового участника
-    //             let message = Message::ParticipantNotificationAdded(addr.to_string(), addr);
-    //             let output_data = bincode::serialize(&message).unwrap();
-    //
-    //             for peer in storage.receivers() {
-    //                 // Итерируемся по всем известным участникам
-    //                 handler.network().send(peer.endpoint, &output_data); // Отправляем уведомление об новом участнике
-    //             }
-    //
-    //             storage.add_new_one(endpoint, addr); // Добавляем нового участника в хранилище
-    //             println!("Added participant with ip {}", addr);
-    //             log_connected_to_the_peers(&list)
-    //         } else {
-    //             println!("Participant with addr '{}' already exists", addr);
-    //         }
-    //     }
-    //
-    //     fn unregister(
-    //         &self,
-    //         peers: &Arc<Mutex<PeersStorage<Endpoint>>>,
-    //         endpoint: Endpoint,
-    //         handler: &NodeHandler<()>,
-    //     ) {
-    //         let mut peers = peers.lock().unwrap(); // Блокировка для безопасного доступа к хранилищу
-    //
-    //         // Сначала удаляем участника, используя его endpoint
-    //         peers.remove_peer(endpoint);
-    //
-    //         // Теперь уведомляем остальных участников об удалении этого участника
-    //         let addr = endpoint.addr(); // Получаем адрес участника для уведомлений
-    //         let message = Message::ParticipantNotificationRemoved(addr.to_string());
-    //         let output_data = bincode::serialize(&message).unwrap();
-    //
-    //         for peer in peers.receivers() {
-    //             // Используем метод receivers для получения списка всех текущих участников
-    //             if peer.endpoint != endpoint {
-    //                 // Убедимся, что не отправляем сообщение самому удаляемому участнику
-    //                 handler.network().send(peer.endpoint, &output_data);
-    //             }
-    //         }
-    //
-    //         println!("Removed participant with endpoint {:?}", endpoint);
-    //     }
+    fn spawn_emit_loop(
+        &self,
+        handler: &NodeHandler<()>,
+        participants: Arc<Mutex<PeersStorage<Endpoint>>>,
+        period: u32,
+    ) {
+        let sleep_duration = Duration::from_secs(period as u64);
+        let peers_mut = Arc::clone(&participants);
+        let handler_clone = handler.clone(); // Клонируем NodeHandler для использования в потоке
+
+        thread::spawn(move || loop {
+            thread::sleep(sleep_duration);
+
+            let peers = peers_mut.lock().unwrap();
+            let receivers = peers.receivers();
+
+            if receivers.is_empty() {
+                continue;
+            }
+
+            let msg_text = "test message".to_string();
+            let msg = Message::Info(msg_text.clone());
+
+            log_sending_message(
+                &msg_text,
+                &receivers
+                    .iter()
+                    .map(|PeerAddr { public, .. }| public)
+                    .collect::<Vec<&SocketAddr>>(),
+            );
+
+            for PeerAddr { endpoint, .. } in receivers {
+                send_message(&handler_clone, endpoint, &msg);
+            }
+        });
+    }
 }
 
 trait ToSocketAddr {
@@ -258,7 +268,7 @@ impl ToSocketAddr for &SocketAddr {
     }
 }
 
-fn format_list_of_addrs<T: ToSocketAddr>(items: &Vec<T>) -> String {
+fn format_list_of_addrs<T: ToSocketAddr>(items: &[T]) -> String {
     if items.is_empty() {
         "[no one]".to_owned()
     } else {
@@ -276,9 +286,9 @@ fn format_list_of_addrs<T: ToSocketAddr>(items: &Vec<T>) -> String {
 //     println!("My address is \"{}\"", ToSocketAddr::get_addr(addr));
 // }
 
-fn log_connected_to_the_peers<T: ToSocketAddr>(peers: &Vec<T>) {
-    println!("Connected to the peers at {}", format_list_of_addrs(peers));
-}
+// fn log_connected_to_the_peers<T: ToSocketAddr>(peers: &Vec<T>) {
+//     print_event("Connected to the peers at {}", format_list_of_addrs(peers));
+// }
 
 fn log_message_received<T: ToSocketAddr>(from: &T, text: &str) {
     println!(

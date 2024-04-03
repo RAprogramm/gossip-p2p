@@ -40,8 +40,19 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
         self.map.insert(endpoint, PeerInfo::KnownPeer);
     }
 
+    // pub fn add_new_one(&mut self, endpoint: T, pub_addr: SocketAddr) {
+    //     self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
+    // }
+
     pub fn add_new_one(&mut self, endpoint: T, pub_addr: SocketAddr) {
-        self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
+        // Не добавляем, если такой адрес уже присутствует
+        if !self
+            .map
+            .values()
+            .any(|info| matches!(info, PeerInfo::NewOne(addr) if addr == &pub_addr))
+        {
+            self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
+        }
     }
 
     pub fn remove_peer(&mut self, endpoint: T) {
@@ -55,7 +66,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
             .iter()
             .map(|(endpoint, info)| match info {
                 PeerInfo::KnownPeer => endpoint.addr(),
-                PeerInfo::NewOne(public_addr) => public_addr.clone(),
+                PeerInfo::NewOne(public_addr) => *public_addr,
             })
             .for_each(|addr| {
                 list.push(addr);
@@ -70,7 +81,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
             .map(|(endpoint, info)| {
                 let public = match info {
                     PeerInfo::KnownPeer => endpoint.addr(),
-                    PeerInfo::NewOne(public_addr) => public_addr.clone(),
+                    PeerInfo::NewOne(public_addr) => *public_addr,
                 };
                 PeerAddr {
                     endpoint: endpoint.clone(),
@@ -83,7 +94,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
     pub fn get_pub_addr(&self, endpoint: &T) -> Option<SocketAddr> {
         self.map.get(endpoint).map(|founded| match founded {
             PeerInfo::KnownPeer => endpoint.addr(),
-            PeerInfo::NewOne(addr) => addr.clone(),
+            PeerInfo::NewOne(addr) => *addr,
         })
     }
 }
