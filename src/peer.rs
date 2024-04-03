@@ -4,6 +4,7 @@ use super::message::Message;
 
 use message_io::network::{Endpoint, NetEvent, Transport};
 use message_io::node::{self, NodeHandler, NodeListener};
+use rand::Rng;
 
 use crate::printer::{init as logger_init, print_event};
 use std::io::{self};
@@ -13,11 +14,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub struct Peer {
+    node_handler: NodeHandler<()>,
+    node_listener: Option<NodeListener<()>>,
     public_addr: SocketAddr,
-    handler: NodeHandler<()>,
     period: u32,
     connect: Option<String>,
-    node_listener: Option<NodeListener<()>>,
     participants: Arc<Mutex<PeersStorage<Endpoint>>>,
     time_start: Arc<Instant>,
 }
@@ -35,7 +36,7 @@ impl Peer {
 
         Ok(Self {
             public_addr,
-            handler,
+            node_handler: handler,
             node_listener: Some(listener),
             connect,
             period,
@@ -47,7 +48,11 @@ impl Peer {
     pub fn run(mut self) {
         // Connection to the first peer
         if let Some(addr) = &self.connect {
-            match self.handler.network().connect(Transport::FramedTcp, addr) {
+            match self
+                .node_handler
+                .network()
+                .connect(Transport::FramedTcp, addr)
+            {
                 Ok((endpoint, _)) => {
                     {
                         let mut peers = self.participants.lock().unwrap();
@@ -56,14 +61,14 @@ impl Peer {
 
                     // Передаю свой публичный адрес
                     send_message(
-                        &self.handler,
+                        &self.node_handler,
                         endpoint,
                         &Message::MyPubAddr(self.public_addr),
                     );
 
                     // Request a list of existing peers
                     // Response will be in event queue
-                    send_message(&self.handler, endpoint, &Message::GiveMeAListOfPeers);
+                    send_message(&self.node_handler, endpoint, &Message::GiveMeAListOfPeers);
                 }
                 Err(_) => {
                     println!("Failed to connect to {}", &addr);
@@ -71,16 +76,15 @@ impl Peer {
             }
         }
 
-        let handler = self.handler.clone();
+        let handler = self.node_handler.clone();
         let period = self.period;
-        let time_start_clone = Arc::clone(&self.time_start);
-
         let tick_duration = Duration::from_secs(period as u64);
         let peers_mut = Arc::clone(&self.participants);
         let handler_clone = handler.clone();
+        let clone_start_time = self.time_start.clone();
+
         thread::spawn(move || loop {
             thread::sleep(tick_duration);
-            print_event(time_start_clone.clone(), "test message");
 
             let peers = peers_mut.lock().unwrap();
             let receivers = peers.receivers();
@@ -89,16 +93,20 @@ impl Peer {
                 continue;
             }
 
-            let msg_text = "test message".to_string();
+            let msg_text = format!("random message {}", rand::thread_rng().gen_range(0..1000));
             let msg = Message::Info(msg_text.clone());
 
-            log_sending_message(
+            let formated_msg = format!(
+                "Sending message [{}] to {}",
                 &msg_text,
-                &receivers
-                    .iter()
-                    .map(|PeerAddr { public, .. }| public)
-                    .collect::<Vec<&SocketAddr>>(),
+                format_list_of_addrs(
+                    &receivers
+                        .iter()
+                        .map(|PeerAddr { public, .. }| public)
+                        .collect::<Vec<&SocketAddr>>(),
+                )
             );
+            print_event(clone_start_time.clone(), &formated_msg);
 
             for PeerAddr { endpoint, .. } in receivers {
                 send_message(&handler_clone, endpoint, &msg);
@@ -107,6 +115,8 @@ impl Peer {
 
         let node_listener = self.node_listener.take().unwrap();
         node_listener.for_each(move |event| match event.network() {
+            NetEvent::Connected(_, _) => {}
+
             NetEvent::Accepted(endpoint, _) => {
                 {
                     let mut peers = self.participants.lock().unwrap();
@@ -115,16 +125,16 @@ impl Peer {
 
                 // Передаю свой публичный адрес
                 send_message(
-                    &self.handler,
+                    &self.node_handler,
                     endpoint,
                     &Message::MyPubAddr(self.public_addr),
                 );
 
                 // Request a list of existing peers
                 // Response will be in event queue
-                send_message(&self.handler, endpoint, &Message::GiveMeAListOfPeers);
+                send_message(&self.node_handler, endpoint, &Message::GiveMeAListOfPeers);
             }
-            NetEvent::Connected(_, _) => {}
+
             NetEvent::Message(message_sender, input_data) => {
                 let message: Message = bincode::deserialize(input_data).unwrap();
                 match message {
@@ -132,28 +142,33 @@ impl Peer {
                         let mut participants = self.participants.lock().unwrap();
                         participants.add_new_one(message_sender, pub_addr);
                     }
+
                     Message::GiveMeAListOfPeers => {
                         let list = {
                             let participants = self.participants.lock().unwrap();
                             participants.get_peers_list()
                         };
                         let msg = Message::TakePeersList(list);
-                        send_message(&self.handler, message_sender, &msg);
+                        send_message(&self.node_handler, message_sender, &msg);
                     }
+
                     Message::TakePeersList(addrs) => {
                         let filtered: Vec<&SocketAddr> =
                             addrs.iter().filter(|x| x != &&self.public_addr).collect();
 
-                        print_event(self.time_start.clone(), &format_list_of_addrs(&filtered));
+                        let foramtted_msg = format!(
+                            "Connected to the peers at {}",
+                            format_list_of_addrs(&filtered)
+                        );
+                        print_event(self.time_start.clone(), &foramtted_msg);
 
                         for peer in &filtered {
                             if peer == &&message_sender.addr() {
                                 continue;
                             }
-
-                            log_connected_to_the_peers(&filtered);
                         }
                     }
+
                     Message::Info(text) => {
                         let pub_addr = self
                             .participants
@@ -161,10 +176,14 @@ impl Peer {
                             .unwrap()
                             .get_pub_addr(&message_sender)
                             .unwrap();
-                        log_message_received(&pub_addr, &text);
+
+                        let formatted_msg =
+                            format!("Received message [{}] from \"{}\"", &text, &pub_addr);
+                        print_event(self.time_start.clone(), &formatted_msg);
                     }
                 }
             }
+
             NetEvent::Disconnected(endpoint) => {
                 let mut participants = self.participants.lock().unwrap();
                 participants.remove_peer(endpoint);
@@ -213,30 +232,6 @@ fn format_list_of_addrs<T: ToSocketAddr>(items: &[T]) -> String {
 
         format!("[{}]", joined)
     }
-}
-
-// fn log_my_address<T: ToSocketAddr>(addr: &T) {
-//     println!("My address is \"{}\"", ToSocketAddr::get_addr(addr));
-// }
-
-fn log_connected_to_the_peers<T: ToSocketAddr>(peers: &[T]) {
-    println!("Connected to the peers at {}", format_list_of_addrs(peers));
-}
-
-fn log_message_received<T: ToSocketAddr>(from: &T, text: &str) {
-    println!(
-        "Received message [{}] from \"{}\"",
-        text,
-        ToSocketAddr::get_addr(from)
-    );
-}
-
-fn log_sending_message<T: ToSocketAddr>(message: &str, receivers: &[T]) {
-    println!(
-        "Sending message [{}] to {}",
-        message,
-        format_list_of_addrs(receivers)
-    );
 }
 
 fn send_message(handler: &NodeHandler<()>, to: Endpoint, msg: &Message) {
