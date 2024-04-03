@@ -25,7 +25,7 @@ pub struct PeerAddr<T: PeerEndpoint> {
 
 enum PeerInfo {
     KnownPeer,
-    NewOne(SocketAddr),
+    UnknownPeer(SocketAddr),
 }
 
 impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
@@ -49,9 +49,9 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
         if !self
             .map
             .values()
-            .any(|info| matches!(info, PeerInfo::NewOne(addr) if addr == &pub_addr))
+            .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
         {
-            self.map.insert(endpoint, PeerInfo::NewOne(pub_addr));
+            self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
         }
     }
 
@@ -66,7 +66,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
             .iter()
             .map(|(endpoint, info)| match info {
                 PeerInfo::KnownPeer => endpoint.addr(),
-                PeerInfo::NewOne(public_addr) => *public_addr,
+                PeerInfo::UnknownPeer(public_addr) => *public_addr,
             })
             .for_each(|addr| {
                 list.push(addr);
@@ -81,7 +81,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
             .map(|(endpoint, info)| {
                 let public = match info {
                     PeerInfo::KnownPeer => endpoint.addr(),
-                    PeerInfo::NewOne(public_addr) => *public_addr,
+                    PeerInfo::UnknownPeer(public_addr) => *public_addr,
                 };
                 PeerAddr {
                     endpoint: endpoint.clone(),
@@ -94,7 +94,7 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
     pub fn get_pub_addr(&self, endpoint: &T) -> Option<SocketAddr> {
         self.map.get(endpoint).map(|founded| match founded {
             PeerInfo::KnownPeer => endpoint.addr(),
-            PeerInfo::NewOne(addr) => *addr,
+            PeerInfo::UnknownPeer(addr) => *addr,
         })
     }
 }
