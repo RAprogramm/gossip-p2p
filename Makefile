@@ -1,11 +1,18 @@
+.PHONY: build run
+
+TARGET=./gossip_p2p
+BUILD_PATH=target/debug/gossip_p2p
+LOCALHOST=127.0.0.1:
+
+$(TARGET): $(BUILD_PATH)
+	cp $(BUILD_PATH) $(TARGET)
+
+$(BUILD_PATH):
+	cargo build
+
 build:
-	cargo build && cp target/debug/peer ./
+	cargo build --release
+	cp $(BUILD_PATH) $(TARGET)
 
-start_peer_1:
-	cargo run -- --period=5 --port=8080
-
-start_peer_2:
-	cargo run -- --period=6 --port=8081 --connect="127.0.0.1:8080"
-
-start_peer_3:
-	cargo run -- --period=7 --port=8082 --connect="127.0.0.1:8080"
+run: $(TARGET)
+	$(TARGET) --period=$(TICK) --port=$(FROM) $(if $(TO),--connect=$(LOCALHOST)$(TO))
