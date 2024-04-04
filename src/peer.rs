@@ -1,4 +1,5 @@
 use crate::peer_storage::{PeerAddr, PeersStorage};
+use crate::printer::{init as logger_init, print_event};
 use crate::utils::{format_list_of_addrs, send_message};
 
 use super::message::Message;
@@ -7,7 +8,6 @@ use message_io::network::{Endpoint, NetEvent, Transport};
 use message_io::node::{self, NodeHandler, NodeListener};
 use rand::Rng;
 
-use crate::printer::{init as logger_init, print_event};
 use std::io::{self};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -47,12 +47,10 @@ impl Peer {
     }
 
     pub fn run(mut self) {
-        // Connection to the first peer
         if let Some(addr) = &self.connect {
-            let network = self.node_handler.lock().unwrap();
+            let handler = self.node_handler.lock().unwrap();
 
-            // Connection to the first peer
-            match network.network().connect(Transport::FramedTcp, addr) {
+            match handler.network().connect(Transport::FramedTcp, addr) {
                 Ok((endpoint, _)) => {
                     let mut peers = self.participants.lock().unwrap();
                     peers.add_known_peer(endpoint);
@@ -65,11 +63,9 @@ impl Peer {
 
         self.sending_random_message();
 
-        // let node_listener = self.node_listener.take().unwrap();
         if let Some(node_listener) = self.node_listener.take() {
             node_listener.for_each(move |event| match event.network() {
                 NetEvent::Accepted(_, _) => {}
-                // NetEvent::Connected(_, _) => {}
                 NetEvent::Connected(endpoint, established) => {
                     if established {
                         self.connected(endpoint)
@@ -121,8 +117,6 @@ impl Peer {
 
                 NetEvent::Disconnected(endpoint) => {
                     let mut participants = self.participants.lock().unwrap();
-                    // participants.remove_peer(endpoint);
-
                     PeersStorage::drop(&mut participants, endpoint);
                 }
             });
@@ -173,15 +167,13 @@ impl Peer {
         peers.add_known_peer(endpoint);
 
         let mut network = self.node_handler.lock().unwrap();
-        // Передаю свой публичный адрес
+
         send_message(
             &mut network,
             endpoint,
             &Message::PublicAddress(self.public_addr),
         );
 
-        // Request a list of existing peers
-        // Response will be in event queue
         send_message(&mut network, endpoint, &Message::PushPeersList);
     }
 
@@ -197,38 +189,24 @@ impl Peer {
         );
         print_event(self.time_start.clone(), &foramtted_msg);
 
-        let mut network = self.node_handler.lock().unwrap();
+        let network = self.node_handler.lock().unwrap();
+        let mut participants = self.participants.lock().unwrap();
 
         for peer in &filtered {
             if peer == &&message_sender.addr() {
                 continue;
             }
-            //===============================================================
+
+            if participants.is_known_peer(**peer) {
+                continue;
+            }
+
             let (endpoint, _) = network
                 .network()
                 .connect(Transport::FramedTcp, **peer)
                 .unwrap();
 
-            // sending public address
-            let msg = Message::PublicAddress(self.public_addr);
-            send_message(&mut network, endpoint, &msg);
-
-            // saving peer
-            self.participants.lock().unwrap().add_known_peer(endpoint);
-            //================================================================
-
-            // let (endpoint, _) = self
-            //     .node_handler
-            //     .network()
-            //     .connect(Transport::FramedTcp, **peer)
-            //     .unwrap();
-
-            // sending public address
-            // let msg = Message::MyPubAddr(self.public_addr);
-            // send_message(&self.node_handler, endpoint, &msg);
-
-            // saving peer
-            // self.participants.lock().unwrap().add_known_peer(endpoint);
+            participants.add_known_peer(endpoint);
         }
     }
 }

@@ -2,6 +2,7 @@ use message_io::network::Endpoint;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+#[derive(Debug)]
 pub struct PeersStorage<T: PeerEndpoint> {
     map: HashMap<T, PeerInfo>,
     self_pub_addr: SocketAddr,
@@ -23,6 +24,7 @@ pub struct PeerAddr<T: PeerEndpoint> {
     pub endpoint: T,
 }
 
+#[derive(Debug)]
 enum PeerInfo {
     KnownPeer,
     UnknownPeer(SocketAddr),
@@ -35,6 +37,12 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
             self_pub_addr,
         }
     }
+    pub fn is_known_peer(&self, addr: SocketAddr) -> bool {
+        self.map.iter().any(|(endpoint, info)| match info {
+            PeerInfo::KnownPeer => endpoint.addr() == addr,
+            PeerInfo::UnknownPeer(public_addr) => *public_addr == addr,
+        })
+    }
 
     pub fn add_known_peer(&mut self, endpoint: T) {
         self.map.insert(endpoint, PeerInfo::KnownPeer);
@@ -45,19 +53,8 @@ impl<T: PeerEndpoint + std::hash::Hash + std::cmp::Eq + Clone> PeersStorage<T> {
     }
 
     pub fn add_unknown_peer(&mut self, endpoint: T, pub_addr: SocketAddr) {
-        // Не добавляем, если такой адрес уже присутствует
-        if !self
-            .map
-            .values()
-            .any(|info| matches!(info, PeerInfo::UnknownPeer(addr) if addr == &pub_addr))
-        {
-            self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
-        }
+        self.map.insert(endpoint, PeerInfo::UnknownPeer(pub_addr));
     }
-
-    // pub fn remove_peer(&mut self, endpoint: T) {
-    //     self.map.remove(&endpoint);
-    // }
 
     pub fn get_peers_list(&self) -> Vec<SocketAddr> {
         let mut list: Vec<SocketAddr> = Vec::with_capacity(self.map.len() + 1);
