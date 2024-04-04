@@ -1,11 +1,6 @@
 mod cli;
-mod message;
 mod participant;
 mod printer;
-mod storage;
-mod utils;
-
-use std::convert::TryInto;
 
 pub fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -20,7 +15,7 @@ pub fn main() {
             let not_first_participant = cli_args.connect.is_some();
 
             if not_first_participant {
-                let participant_or_server = participant::Participant::new(
+                let participant_or_server = participant::model::Participant::new(
                     cli_args.period.try_into().unwrap(),
                     cli_args.port.into(),
                     cli_args.connect,
@@ -33,7 +28,7 @@ pub fn main() {
                     }
                 }
             } else {
-                let participant_or_server = participant::Participant::new(
+                let participant_or_server = participant::model::Participant::new(
                     cli_args.period.try_into().unwrap(),
                     cli_args.port.into(),
                     None,

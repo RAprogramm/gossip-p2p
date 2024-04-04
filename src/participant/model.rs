@@ -1,8 +1,8 @@
 use crate::printer::{init as logger_init, print_event};
-use crate::storage::{ParticipantAddress, ParticipantsStorage};
-use crate::utils::{format_list_of_addrs, send_message};
 
 use super::message::Message;
+use super::storage::{ParticipantAddress, ParticipantsStorage};
+use super::utils::{format_list_of_addrs, send_message};
 
 use message_io::network::{Endpoint, NetEvent, Transport};
 use message_io::node::{self, NodeHandler, NodeListener};
@@ -103,7 +103,9 @@ impl Participant {
                 send_message(&mut self.node_handler.lock().unwrap(), message_sender, &msg);
             }
 
-            Message::PullParticipantsList(addrs) => self.pull_participants_list(message_sender, addrs),
+            Message::PullParticipantsList(addrs) => {
+                self.pull_participants_list(message_sender, addrs)
+            }
 
             Message::Text(text) => {
                 let pub_addr = self
@@ -184,7 +186,10 @@ impl Participant {
                 && participant_address != message_sender.addr()
                 && !participants.is_known_participant(participant_address)
             {
-                match network.network().connect(Transport::FramedTcp, participant_address) {
+                match network
+                    .network()
+                    .connect(Transport::FramedTcp, participant_address)
+                {
                     Ok((endpoint, _)) => {
                         participants.add_known_participant(endpoint);
                         new_connections = true;

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use message_io::network::Endpoint;
 use message_io::node::NodeHandler;
 
-use crate::message::Message;
+use crate::participant::message::Message;
 
 pub trait ToSocketAddr {
     fn get_addr(&self) -> SocketAddr;
