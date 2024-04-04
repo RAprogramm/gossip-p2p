@@ -1,8 +1,8 @@
 mod cli;
 mod message;
-mod peer;
-mod peer_storage;
+mod participant;
 mod printer;
+mod storage;
 mod utils;
 
 use std::convert::TryInto;
@@ -17,10 +17,10 @@ pub fn main() {
 
     match cli::parse_arguments(&args[1..]) {
         Ok(cli_args) => {
-            let is_participant = cli_args.connect.is_some();
+            let not_first_participant = cli_args.connect.is_some();
 
-            if is_participant {
-                let participant_or_server = peer::Peer::new(
+            if not_first_participant {
+                let participant_or_server = participant::Participant::new(
                     cli_args.period.try_into().unwrap(),
                     cli_args.port.into(),
                     cli_args.connect,
@@ -33,7 +33,7 @@ pub fn main() {
                     }
                 }
             } else {
-                let participant_or_server = peer::Peer::new(
+                let participant_or_server = participant::Participant::new(
                     cli_args.period.try_into().unwrap(),
                     cli_args.port.into(),
                     None,

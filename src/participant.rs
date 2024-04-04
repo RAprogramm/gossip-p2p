@@ -1,5 +1,5 @@
-use crate::peer_storage::{PeerAddr, PeersStorage};
 use crate::printer::{init as logger_init, print_event};
+use crate::storage::{ParticipantAddress, ParticipantsStorage};
 use crate::utils::{format_list_of_addrs, send_message};
 
 use super::message::Message;
@@ -14,17 +14,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub struct Peer {
+pub struct Participant {
     node_handler: Arc<Mutex<NodeHandler<()>>>,
     node_listener: Option<NodeListener<()>>,
     public_addr: SocketAddr,
     period: u32,
     connect: Option<String>,
-    participants: Arc<Mutex<PeersStorage<Endpoint>>>,
+    participants: Arc<Mutex<ParticipantsStorage<Endpoint>>>,
     time_start: Arc<Instant>,
 }
 
-impl Peer {
+impl Participant {
     pub fn new(period: u32, port: u32, connect: Option<String>) -> io::Result<Self> {
         let (handler, listener) = node::split::<()>();
 
@@ -41,7 +41,7 @@ impl Peer {
             node_listener: Some(listener),
             connect,
             period,
-            participants: Arc::new(Mutex::new(PeersStorage::new(public_addr))),
+            participants: Arc::new(Mutex::new(ParticipantsStorage::new(public_addr))),
             time_start,
         })
     }
@@ -52,8 +52,8 @@ impl Peer {
 
             match handler.network().connect(Transport::FramedTcp, addr) {
                 Ok((endpoint, _)) => {
-                    let mut peers = self.participants.lock().unwrap();
-                    peers.add_known_peer(endpoint);
+                    let mut participants = self.participants.lock().unwrap();
+                    participants.add_known_participant(endpoint);
                 }
                 Err(_) => {
                     println!("Failed to connect to {}", &addr);
@@ -76,64 +76,60 @@ impl Peer {
                 }
                 NetEvent::Message(message_sender, input_data) => {
                     let message: Message = bincode::deserialize(input_data).unwrap();
-
-                    match message {
-                        Message::PublicAddress(pub_addr) => {
-                            let mut participants = self.participants.lock().unwrap();
-                            participants.add_unknown_peer(message_sender, pub_addr);
-                        }
-
-                        Message::PushPeersList => {
-                            let list = {
-                                let participants = self.participants.lock().unwrap();
-                                participants.get_peers_list()
-                            };
-                            let msg = Message::PullPeersList(list);
-                            send_message(
-                                &mut self.node_handler.lock().unwrap(),
-                                message_sender,
-                                &msg,
-                            );
-                        }
-
-                        Message::PullPeersList(addrs) => {
-                            self.pull_peers_list(message_sender, addrs)
-                        }
-
-                        Message::Text(text) => {
-                            let pub_addr = self
-                                .participants
-                                .lock()
-                                .unwrap()
-                                .get_pub_addr(&message_sender)
-                                .unwrap();
-
-                            let formatted_msg =
-                                format!("Received message [{}] from \"{}\"", &text, &pub_addr);
-                            print_event(self.time_start.clone(), &formatted_msg);
-                        }
-                    }
+                    self.network_messages(message_sender, message)
                 }
 
                 NetEvent::Disconnected(endpoint) => {
                     let mut participants = self.participants.lock().unwrap();
-                    PeersStorage::drop(&mut participants, endpoint);
+                    ParticipantsStorage::drop(&mut participants, endpoint);
                 }
             });
         }
     }
 
+    fn network_messages(&self, message_sender: Endpoint, message: Message) {
+        match message {
+            Message::PublicAddress(pub_addr) => {
+                let mut participants = self.participants.lock().unwrap();
+                participants.add_unknown_participant(message_sender, pub_addr);
+            }
+
+            Message::PushParticipantsList => {
+                let list = {
+                    let participants = self.participants.lock().unwrap();
+                    participants.get_participants_list()
+                };
+                let msg = Message::PullParticipantsList(list);
+                send_message(&mut self.node_handler.lock().unwrap(), message_sender, &msg);
+            }
+
+            Message::PullParticipantsList(addrs) => self.pull_participants_list(message_sender, addrs),
+
+            Message::Text(text) => {
+                let pub_addr = self
+                    .participants
+                    .lock()
+                    .unwrap()
+                    .get_pub_addr(&message_sender)
+                    .unwrap();
+
+                let formatted_msg = format!("Received message [{}] from \"{}\"", &text, &pub_addr);
+                print_event(self.time_start.clone(), &formatted_msg);
+            }
+        }
+    }
+
     fn sending_random_message(&self) {
         let tick_duration = Duration::from_secs(self.period as u64);
-        let peers_clone = Arc::clone(&self.participants);
+        let participants_clone = Arc::clone(&self.participants);
         let handler_clone = Arc::clone(&self.node_handler);
         let clone_start_time = self.time_start.clone();
 
         thread::spawn(move || loop {
             thread::sleep(tick_duration);
 
-            let peers = peers_clone.lock().unwrap();
-            let receivers = peers.receivers();
+            let participants = participants_clone.lock().unwrap();
+            let receivers = participants.receivers();
 
             if receivers.is_empty() {
                 continue;
@@ -150,21 +146,21 @@ impl Peer {
                 format_list_of_addrs(
                     &receivers
                         .iter()
-                        .map(|PeerAddr { public, .. }| public)
+                        .map(|ParticipantAddress { public, .. }| public)
                         .collect::<Vec<&SocketAddr>>(),
                 )
             );
             print_event(clone_start_time.clone(), &formatted_msg);
 
-            for PeerAddr { endpoint, .. } in &receivers {
+            for ParticipantAddress { endpoint, .. } in &receivers {
                 send_message(&mut network, *endpoint, &msg);
             }
         });
     }
 
     fn connected(&self, endpoint: Endpoint) {
-        let mut peers = self.participants.lock().unwrap();
-        peers.add_known_peer(endpoint);
+        let mut participants = self.participants.lock().unwrap();
+        participants.add_known_participant(endpoint);
 
         let mut network = self.node_handler.lock().unwrap();
 
@@ -174,39 +170,41 @@ impl Peer {
             &Message::PublicAddress(self.public_addr),
         );
 
-        send_message(&mut network, endpoint, &Message::PushPeersList);
+        send_message(&mut network, endpoint, &Message::PushParticipantsList);
     }
 
-    fn pull_peers_list(&self, message_sender: Endpoint, addrs: Vec<SocketAddr>) {
-        let filtered: Vec<&SocketAddr> = addrs
-            .iter()
-            .filter(|addr| addr != &&self.public_addr)
-            .collect();
-
-        let foramtted_msg = format!(
-            "Connected to the peers at {}",
-            format_list_of_addrs(&filtered)
-        );
-        print_event(self.time_start.clone(), &foramtted_msg);
-
+    fn pull_participants_list(&self, message_sender: Endpoint, addrs: Vec<SocketAddr>) {
         let network = self.node_handler.lock().unwrap();
         let mut participants = self.participants.lock().unwrap();
 
-        for peer in &filtered {
-            if peer == &&message_sender.addr() {
-                continue;
+        let mut new_connections = false; // Флаг новых подключений
+
+        for &participant_address in addrs.iter() {
+            if participant_address != self.public_addr
+                && participant_address != message_sender.addr()
+                && !participants.is_known_participant(participant_address)
+            {
+                match network.network().connect(Transport::FramedTcp, participant_address) {
+                    Ok((endpoint, _)) => {
+                        participants.add_known_participant(endpoint);
+                        new_connections = true;
+                    }
+                    Err(_) => println!("Failed to connect to {}", participant_address),
+                }
             }
+        }
 
-            if participants.is_known_peer(**peer) {
-                continue;
-            }
-
-            let (endpoint, _) = network
-                .network()
-                .connect(Transport::FramedTcp, **peer)
-                .unwrap();
-
-            participants.add_known_peer(endpoint);
+        if new_connections {
+            let formatted_msg = format!(
+                "Connected to new participants: {}",
+                format_list_of_addrs(
+                    &addrs
+                        .iter()
+                        .filter(|&&addr| addr != self.public_addr)
+                        .collect::<Vec<_>>()
+                )
+            );
+            print_event(self.time_start.clone(), &formatted_msg);
         }
     }
 }
