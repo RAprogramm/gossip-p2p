@@ -11,7 +11,7 @@
 //! - Supports starting a participant as part of an existing network or as the first node in a new network.
 //! - Utilizes submodules for specific functionalities:
 //!   - `cli`: Parses and interprets command-line arguments.
-//!   - `participant`: Manages network participant logic, including message handling and participant storage.
+//!   - `peer`: Manages network peer logic, including message handling and participant storage.
 //!   - `printer`: Provides utilities for logging and output formatting.
 //!
 //! ## Usage
@@ -39,7 +39,8 @@
 //! ```
 
 mod cli;
-mod participant;
+mod message;
+mod peer;
 mod printer;
 
 pub fn main() {
@@ -54,34 +55,17 @@ pub fn main() {
     // Parse the command-line arguments and configure the application accordingly.
     match cli::parse_arguments(&args[1..]) {
         Ok(cli_args) => {
-            // Determine if the participant is the first in the network or joining an existing one.
-            let not_first_participant = cli_args.connect.is_some();
-
-            if not_first_participant {
-                let participant_or_server = participant::model::Participant::new(
-                    cli_args.period.try_into().unwrap(),
-                    cli_args.port.into(),
-                    cli_args.connect,
-                );
-                match participant_or_server {
-                    Ok(instance) => instance.run(),
-                    Err(e) => {
-                        eprintln!("Failed to create instance: {}", e);
+            let peer = peer::Peer::new(cli_args.period, cli_args.port, cli_args.connect);
+            match peer {
+                Ok(instance) => {
+                    if let Err(e) = instance.run() {
+                        eprintln!("{}", e);
                         std::process::exit(1);
                     }
                 }
-            } else {
-                let participant_or_server = participant::model::Participant::new(
-                    cli_args.period.try_into().unwrap(),
-                    cli_args.port.into(),
-                    None,
-                );
-                match participant_or_server {
-                    Ok(instance) => instance.run(),
-                    Err(err) => {
-                        eprintln!("Can not run the instance: {}", err);
-                        std::process::exit(1);
-                    }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
                 }
             }
         }

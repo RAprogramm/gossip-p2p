@@ -2,8 +2,8 @@
 
 <p align="center">
   <a href="#summary">Summary</a> •
-  <a href="#usage">Usage</a> • 
-  <a href="#libraries">Using libraries</a>
+  <a href="#usage">Usage</a> •
+  <a href="#libraries">Production replacements</a>
 </p>
 
 ---
@@ -14,7 +14,7 @@
 
 
 ## Summary
-The peer should have a cli interface to start it and connect itself to the other peers. Once connected, the peer should send a random gossip message to all the other peers every N seconds. The messaging period should also be specifiable in the command line. When a peer receives a message from the other peers, it should print it in the console.
+The peer has a CLI interface to start it and connect to other peers. Once connected, the peer sends a pseudo-random gossip message to all known peers every `N` seconds. When a peer receives a message from another peer it prints it to the console.
 
 ---
 
@@ -64,13 +64,17 @@ make run TICK=7 FROM=8082 TO=8080
 
 ---
 
-<h2 id="libraries">Using libraries</h2>
+<h2 id="libraries">Production replacements</h2>
 
-- [![message-io](https://shields.io/badge/message_io-0.18.1-darkgreen)](https://docs.rs/message_io/0.18.1/message_io/index.html) is a library designed to simplify network programming. It offers easy-to-use abstractions for handling asynchronous message-based communication across various protocols like TCP, UDP, and WebSockets. The library aims to minimize the boilerplate code required for network operations, allowing developers to focus on the logic of their applications. It supports event-driven architecture, enabling efficient handling of incoming messages and network events through a single event loop.
+This project intentionally avoids third‑party crates to serve as an educational
+example. For production systems consider the following crates:
 
-- [![bincode](https://shields.io/badge/bincode-1.3.3-darkgreen)](https://docs.rs/bincode/1.3.3/bincode/index.html) is a library used for serializing and deserializing Rust data structures efficiently and compactly using a binary representation. It's commonly used when you need fast and compact serialization for purposes like saving to a file, sending data over the network, or for any other scenario where you want to convert Rust structures to a byte format and back. bincode works by automatically generating the serialization and deserialization code for you, requiring minimal manual intervention. This makes it very convenient for quickly implementing binary serialization without needing to worry about the specifics of the binary format.
+- [`tokio`](https://docs.rs/tokio) or [`mio`](https://docs.rs/mio) for
+  asynchronous networking.
+- [`serde`](https://docs.rs/serde) and [`bincode`](https://docs.rs/bincode) for
+  efficient serialization.
+- [`rand`](https://docs.rs/rand) for robust random number generation.
 
-- [![serde](https://shields.io/badge/serde-1.0.197-darkgreen)](https://docs.rs/serde/1.0.197/serde/index.html) is a library framework for serializing and deserializing data structures efficiently and generically. It supports various data formats, such as JSON, YAML, Bincode, and others, through extensible data format traits. serde is known for its high performance and strong type safety, making it a standard choice for handling data interchange in Rust applications.
-
-- [![rand](https://shields.io/badge/rand-0.8.5-darkgreen)](https://docs.rs/rand/0.8.5/rand/index.html) is a library that provides utilities to generate random numbers, derive random values from various distributions, and perform other randomness-related tasks. It's a comprehensive solution for all needs related to randomness in Rust applications, offering both ease of use for common tasks and flexibility for more complex requirements.
+These libraries provide battle‑tested implementations that are more efficient
+and feature rich than the minimal versions included here.
 
