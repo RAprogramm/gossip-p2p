@@ -102,25 +102,47 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
-    fn serialize_roundtrip() {
-        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
-        let messages = vec![
-            Message::Join(addr),
-            Message::Peers(vec![addr]),
-            Message::Text("hi".to_string()),
-        ];
-        for msg in messages {
-            let line = msg.serialize();
-            let parsed = Message::parse(&line).unwrap();
-            assert_eq!(msg, parsed);
-        }
+    fn parse_invalid_format() {
+        let err = Message::parse("UNKNOWN").unwrap_err();
+        assert!(matches!(err, MessageError::InvalidFormat));
     }
 
     #[test]
-    fn parse_invalid() {
-        let err = Message::parse("UNKNOWN").unwrap_err();
-        matches!(err, MessageError::InvalidFormat);
+    fn parse_invalid_address() {
+        let err = Message::parse("JOIN not-an-addr").unwrap_err();
+        assert!(matches!(err, MessageError::InvalidAddress(_)));
+    }
+
+    fn ipv4_addr() -> impl Strategy<Value = SocketAddr> {
+        (any::<[u8; 4]>(), any::<u16>()).prop_map(|(ip, port)| SocketAddr::from((ip, port)))
+    }
+
+    proptest! {
+        #[test]
+        fn join_roundtrip(addr in ipv4_addr()) {
+            let msg = Message::Join(addr);
+            let line = msg.serialize();
+            let parsed = Message::parse(&line).unwrap();
+            prop_assert_eq!(parsed, msg);
+        }
+
+        #[test]
+        fn text_roundtrip(text in proptest::string::string_regex("[A-Za-z0-9]{0,64}").unwrap()) {
+            let msg = Message::Text(text.clone());
+            let line = msg.serialize();
+            let parsed = Message::parse(&line).unwrap();
+            prop_assert_eq!(parsed, msg);
+        }
+
+        #[test]
+        fn peers_roundtrip(addrs in proptest::collection::vec(ipv4_addr(), 0..8)) {
+            let msg = Message::Peers(addrs.clone());
+            let line = msg.serialize();
+            let parsed = Message::parse(&line).unwrap();
+            prop_assert_eq!(parsed, msg);
+        }
     }
 }

@@ -181,4 +181,11 @@ mod tests {
         let args = vec!["--period=5".to_string()];
         assert!(parse_arguments(&args).is_err());
     }
+
+    #[test]
+    fn help_message_contains_usage() {
+        let msg = get_help_message("prog");
+        assert!(msg.contains("Usage:"));
+        assert!(msg.contains("--period"));
+    }
 }
