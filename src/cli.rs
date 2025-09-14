@@ -149,11 +149,36 @@ pub fn parse_arguments(args: &[String]) -> Result<CliArguments, &'static str> {
     let connect_arg = args
         .iter()
         .find(|arg| arg.starts_with("--connect="))
-        .map(|s| s.split('=').nth(1).unwrap().to_string());
+        .and_then(|s| s.split('=').nth(1))
+        .map(|s| s.to_string());
 
     Ok(CliArguments {
         period: period_arg,
         port: port_arg as u16,
         connect: connect_arg,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ok() {
+        let args = vec![
+            "--period=5".to_string(),
+            "--port=8080".to_string(),
+            "--connect=127.0.0.1:8081".to_string(),
+        ];
+        let parsed = parse_arguments(&args).unwrap();
+        assert_eq!(parsed.period, 5);
+        assert_eq!(parsed.port, 8080);
+        assert_eq!(parsed.connect, Some("127.0.0.1:8081".to_string()));
+    }
+
+    #[test]
+    fn parse_fail() {
+        let args = vec!["--period=5".to_string()];
+        assert!(parse_arguments(&args).is_err());
+    }
 }
