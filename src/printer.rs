@@ -11,7 +11,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// A simple printer for logging events with time elapsed since an `Instant`.
 pub struct SimplePrinter;
@@ -30,21 +30,38 @@ impl SimplePrinter {
     /// Basic usage:
     ///
     /// ```
-    /// let start_time = std::time::Instant::now();
-    /// let start_time = std::sync::Arc::new(start_time);
-    /// simple_printer::SimplePrinter::time(start_time, "Hello, world!");
+    /// use std::sync::Arc;
+    /// use std::time::Instant;
+    ///
+    /// let start_time = Arc::new(Instant::now());
+    /// gossip_p2p::printer::SimplePrinter::time(start_time, "Hello, world!");
     /// ```
     fn time(start_time: Arc<Instant>, msg: &str) {
         let elapsed = Instant::now().duration_since(*start_time);
-
-        // Calculate hours, minutes, and seconds from elapsed time
-        let hours = elapsed.as_secs() / 3600;
-        let minutes = (elapsed.as_secs() % 3600) / 60;
-        let seconds = elapsed.as_secs() % 60;
-
-        // Print the formatted message with elapsed time
-        println!("# {:02}:{:02}:{:02} - {}", hours, minutes, seconds, msg);
+        println!("{}", format_elapsed(elapsed, msg));
     }
+}
+
+/// Format a message with the elapsed time.
+///
+/// This helper returns the formatted output used by [`SimplePrinter`].
+///
+/// # Examples
+///
+/// ```
+/// use gossip_p2p::printer::format_elapsed;
+/// use std::time::Duration;
+///
+/// assert_eq!(
+///     format_elapsed(Duration::new(3661, 0), "hi"),
+///     "# 01:01:01 - hi"
+/// );
+/// ```
+pub fn format_elapsed(elapsed: Duration, msg: &str) -> String {
+    let hours = elapsed.as_secs() / 3600;
+    let minutes = (elapsed.as_secs() % 3600) / 60;
+    let seconds = elapsed.as_secs() % 60;
+    format!("# {:02}:{:02}:{:02} - {}", hours, minutes, seconds, msg)
 }
 
 /// Initializes the printing utility and logs the starting event.
@@ -67,7 +84,7 @@ impl SimplePrinter {
 ///
 /// ```
 /// let addr = "127.0.0.1:8080".parse().unwrap();
-/// let start_time = simple_printer::init(&addr);
+/// let start_time = gossip_p2p::printer::init(&addr);
 /// ```
 pub fn init(addr: &SocketAddr) -> Arc<Instant> {
     let start_time = Arc::new(Instant::now());
@@ -96,8 +113,26 @@ pub fn init(addr: &SocketAddr) -> Arc<Instant> {
 ///
 /// ```
 /// // Assuming `start_time` has been initialized using `init` function
-/// simple_printer::print_event(start_time, "Event occurred");
+/// gossip_p2p::printer::print_event(start_time, "Event occurred");
 /// ```
 pub fn print_event(start_time: Arc<Instant>, msg: &str) {
     SimplePrinter::time(start_time, msg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_elapsed_formats() {
+        let formatted = format_elapsed(Duration::new(3661, 0), "test");
+        assert_eq!(formatted, "# 01:01:01 - test");
+    }
+
+    #[test]
+    fn init_sets_start_time() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let start = init(&addr);
+        assert!(Instant::now().duration_since(*start) < Duration::from_secs(1));
+    }
 }

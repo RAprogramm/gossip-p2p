@@ -9,3 +9,6 @@ name = "gossip_p2p"
 path = "src/main.rs"
 
 [dependencies]
+
+[dev-dependencies]
+proptest = "1"
